@@ -95,7 +95,7 @@ EOF
 # 检查 jq 是否安装
 check_jq() {
     if ! command -v jq &> /dev/null; then
-        echo -e "${YELLOW}��检测到 jq，正在安装...${RESET}"
+        echo -e "${YELLOW}���检测到 jq，正在安装...${RESET}"
         case $OS_TYPE in
             alpine)
                 apk add --no-cache jq
@@ -134,7 +134,7 @@ check_snell_installed() {
 # 获取 Snell 最新版本
 get_latest_snell_version() {
     latest_version=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-    if ( -n "$latest_version" ]; then
+    if [ -n "$latest_version" ]; then
         SNELL_VERSION="v${latest_version}"
     else
         echo -e "${RED}获取 Snell 最新版本失败，使用默认版本 ${SNELL_VERSION}${RESET}"
@@ -765,7 +765,7 @@ setup_shadowtls() {
     echo -e "${CYAN}正在执行 ShadowTLS 管理脚本...${RESET}"
     bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/shadowtls.sh)
     
-    # ShadowTLS 脋本执行完毕后会自动返回这里
+    # ShadowTLS 脋本执行完毕后会自动返回这��
     echo -e "${GREEN}ShadowTLS 管理操作完成${RESET}"
     sleep 1  # 给用户一点时间看到提示
 }
