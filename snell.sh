@@ -256,30 +256,6 @@ EOF
     init_system=$(get_init_system)
     
     case $init_system in
-        systemd)
-            cat > ${SYSTEMD_SERVICE_FILE} << EOF
-[Unit]
-Description=Snell Proxy Service
-After=network.target
-
-[Service]
-Type=simple
-User=nobody
-Group=nogroup
-LimitNOFILE=32768
-ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=snell-server
-
-[Install]
-WantedBy=multi-user.target
-EOF
-            systemctl daemon-reload
-            systemctl enable snell
-            systemctl start snell
-            ;;
         openrc)
             cat > /etc/init.d/snell << EOF
 #!/sbin/openrc-run
@@ -288,22 +264,47 @@ name="Snell Proxy"
 description="Snell Proxy Service"
 command="${INSTALL_DIR}/snell-server"
 command_args="-c ${SNELL_CONF_FILE}"
-command_user="nobody:nogroup"
-command_background=yes
-pidfile="/run/\${RC_SVCNAME}.pid"
+command_background="yes"
+pidfile="/run/snell.pid"
+output_log="/var/log/snell.log"
+error_log="/var/log/snell.err"
 
 depend() {
     need net
     after net
 }
+
+start_pre() {
+    checkpath -f -m 0644 -o root:root "\$output_log" "\$error_log"
+    checkpath -f -m 0644 -o root:root "${SNELL_CONF_FILE}"
+    checkpath -d -m 0755 -o root:root /run
+}
 EOF
             chmod +x /etc/init.d/snell
+            
+            # 创建日志文件
+            touch /var/log/snell.log /var/log/snell.err
+            chmod 644 /var/log/snell.log /var/log/snell.err
+            
+            # 确保配置文件权限正确
+            chown root:root ${SNELL_CONF_FILE}
+            chmod 644 ${SNELL_CONF_FILE}
+            
+            # 添加服务并启动
             rc-update add snell default
-            rc-service snell start
+            rc-service snell restart
+            
+            # 检查服务状态并输出日志信息
+            sleep 2
+            if ! rc-service snell status >/dev/null 2>&1; then
+                echo -e "${RED}服务启动失败，查看错误日志：${RESET}"
+                tail -n 20 /var/log/snell.err
+            else
+                echo -e "${GREEN}服务启动成功${RESET}"
+            fi
             ;;
         *)
-            echo -e "${YELLOW}未检测到支持的服务管理系统，将��后台方式运行${RESET}"
-            nohup ${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE} >/dev/null 2>&1 &
+            echo -e "${YELLOW}未检测到支持的服务管理系统${RESET}"
             ;;
     esac
 
@@ -528,11 +529,14 @@ update_script() {
 
 # 检查服务状态的函数
 check_service_status() {
-    local service=$1
-    if rc-service $service status >/dev/null 2>&1; then
-        echo -e "${GREEN}运行中${RESET}"
+    if [ -f "/etc/init.d/$1" ]; then
+        if rc-service "$1" status >/dev/null 2>&1; then
+            echo -e "${GREEN}运行中${RESET}"
+        else
+            echo -e "${RED}未运行${RESET}"
+        fi
     else
-        echo -e "${RED}未运行${RESET}"
+        echo -e "${RED}未安装${RESET}"
     fi
 }
 
@@ -548,22 +552,26 @@ check_installation() {
 
 # 获取 ShadowTLS 配置
 get_shadowtls_config() {
-    if ! systemctl is-active --quiet shadowtls.service; then
+    if [ ! -f "/etc/init.d/shadowtls" ]; then
         return 1
     fi
     
-    local service_file="/etc/systemd/system/shadowtls.service"
+    if ! rc-service shadowtls status >/dev/null 2>&1; then
+        return 1
+    fi
+    
+    # 读取配置文件中的信息
+    local service_file="/etc/init.d/shadowtls"
     if [ ! -f "$service_file" ]; then
         return 1
     fi
     
-    # 从服务文件中读取配置行
-    local exec_line=$(grep "ExecStart=" "$service_file")
+    # 提取配置信息 (根据 OpenRC 配置文件格式调整)
+    local exec_line=$(grep "command_args" "$service_file")
     if [ -z "$exec_line" ]; then
         return 1
     fi
     
-    # 提取配置信息
     local tls_domain=$(echo "$exec_line" | grep -o -- "--tls [^ ]*" | cut -d' ' -f2)
     local password=$(echo "$exec_line" | grep -o -- "--password [^ ]*" | cut -d' ' -f2)
     local listen_part=$(echo "$exec_line" | grep -o -- "--listen [^ ]*" | cut -d' ' -f2)
@@ -619,7 +627,7 @@ check_and_show_status() {
         if rc-service snell status >/dev/null 2>&1; then
             echo -e "${GREEN}Snell 服务运行中${RESET}"
         else
-            echo -e "${RED}Snell 服务未运行${RESET}"
+            echo -e "${RED}Snell 服务未��行${RESET}"
         fi
     else
         echo -e "${YELLOW}Snell 未安装${RESET}"
