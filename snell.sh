@@ -356,29 +356,33 @@ EOF
     fi
 }
 
-# 卸载 Snell
 uninstall_snell() {
     echo -e "${CYAN}正在卸载 Snell${RESET}"
 
-    systemctl stop snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}停止 Snell 服务失败。${RESET}"
-        exit 1
-    fi
+    # 获取初始化系统类型
+    init_system=$(get_init_system)
 
-    systemctl disable snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}禁用开机自启动失败。${RESET}"
-        exit 1
-    fi
+    # 停止服务
+    case $init_system in
+        systemd)
+            systemctl stop snell
+            systemctl disable snell
+            rm -f /lib/systemd/system/snell.service
+            systemctl daemon-reload
+            ;;
+        openrc)
+            rc-service snell stop
+            rc-update del snell default
+            rm -f /etc/init.d/snell
+            ;;
+        *)
+            # 对于其他系统，尝试查找并结束进程
+            pkill -f "snell-server"
+            ;;
+    esac
 
-    rm /lib/systemd/system/snell.service
-    if [ $? -ne 0 ];then
-        echo -e "${RED}删除 Systemd 服务文件失败。${RESET}"
-        exit 1
-    fi
-
-    rm /usr/local/bin/snell-server
+    # 删除程序文件和配置
+    rm -f /usr/local/bin/snell-server
     rm -rf ${SNELL_CONF_DIR}
 
     echo -e "${GREEN}Snell 卸载成功${RESET}"
@@ -522,7 +526,7 @@ update_script() {
         # 使用 curl 下载脚本并覆盖当前脚本
         curl -s -o "$0" "https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}脚本更新成功！已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
+            echo -e "${GREEN}脚本更新成功���已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
             echo -e "${YELLOW}请重新执行脚本以应用更新。${RESET}"
             exec "$0"  # 重新执行当前脚本
         else
