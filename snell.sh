@@ -190,7 +190,7 @@ get_dns() {
     fi
 }
 
-# 开放端口 (更安全的实现)
+# 开放端口 (更详细的错误输出)
 open_port() {
     local PORT=$1
     
@@ -200,21 +200,42 @@ open_port() {
         return
     fi
 
-    # 尝试加载必要的内核模块
-    modprobe -v ip_tables >/dev/null 2>&1 || true
-    modprobe -v ip6_tables >/dev/null 2>&1 || true
+    # 尝试加载必要的内核模块并捕获错误
+    if ! modprobe ip_tables 2>/tmp/modprobe.error; then
+        echo -e "${YELLOW}警告: 加载 ip_tables 模块失败:${RESET}"
+        cat /tmp/modprobe.error
+    fi
     
-    # 尝试配置 iptables 规则，如果失败则不中断脚本
-    iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT >/dev/null 2>&1 || \
-        echo -e "${YELLOW}警告: 无法配置 IPv4 防火墙规则${RESET}"
+    if ! modprobe ip6_tables 2>/tmp/modprobe.error; then
+        echo -e "${YELLOW}警告: 加载 ip6_tables 模块失败:${RESET}"
+        cat /tmp/modprobe.error
+    fi
+    
+    # 尝试配置 iptables 规则并捕获错误
+    if ! iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/tmp/iptables.error; then
+        echo -e "${YELLOW}警告: 无法配置 IPv4 防火墙规则:${RESET}"
+        cat /tmp/iptables.error
+    fi
         
-    ip6tables -I INPUT -p tcp --dport "$PORT" -j ACCEPT >/dev/null 2>&1 || \
-        echo -e "${YELLOW}警告: 无法配置 IPv6 防火墙规���${RESET}"
+    if ! ip6tables -I INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/tmp/ip6tables.error; then
+        echo -e "${YELLOW}警告: 无法配置 IPv6 防火墙规则:${RESET}"
+        cat /tmp/ip6tables.error
+    fi
     
-    # 尝试保存规则，如果失败则不中断脚本
+    # 尝试保存规则并捕获错误
     mkdir -p /etc/iptables
-    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-    ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+    if ! iptables-save > /etc/iptables/rules.v4 2>/tmp/iptables-save.error; then
+        echo -e "${YELLOW}警告: 无法保存 IPv4 防火墙规则:${RESET}"
+        cat /tmp/iptables-save.error
+    fi
+    
+    if ! ip6tables-save > /etc/iptables/rules.v6 2>/tmp/ip6tables-save.error; then
+        echo -e "${YELLOW}警告: 无法保存 IPv6 防火墙规则:${RESET}"
+        cat /tmp/ip6tables-save.error
+    fi
+    
+    # 清理临时文件
+    rm -f /tmp/*.error
 }
 
 # 获取初始化系统类型
@@ -315,7 +336,12 @@ EOF
             sleep 2
             if ! rc-service snell status >/dev/null 2>&1; then
                 echo -e "${RED}服务启动失败，查看错误日志：${RESET}"
+                echo -e "${YELLOW}== snell.err 日志 ==${RESET}"
                 tail -n 20 /var/log/snell.err
+                echo -e "${YELLOW}== snell.log 日志 ==${RESET}"
+                tail -n 20 /var/log/snell.log
+                echo -e "${YELLOW}== dmesg 日志 ==${RESET}"
+                dmesg | tail -n 20
             else
                 echo -e "${GREEN}服务启动成功${RESET}"
             fi
@@ -352,7 +378,7 @@ EOF
     # 如果有 IPv6 地址
     if [ ! -z "$IPV6_ADDR" ]; then
         IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
-        echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所��国家: ${RESET}${IP_COUNTRY_IPV6}"
+        echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
 
     echo -e "${GREEN}Snell 安装成功${RESET}"
