@@ -22,14 +22,6 @@ INSTALL_DIR="/usr/local/bin"
 SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
 SNELL_VERSION="v4.0.1"  # 初始默认版本
 
-# 等待其他 apt 进程完成
-wait_for_apt() {
-    while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
-        echo -e "${YELLOW}等待其他 apt 进程完成...${RESET}"
-        sleep 1
-    done
-}
-
 # 检查是否以 root 权限运行
 check_root() {
     if [ "$(id -u)" != "0" ]; then
@@ -39,85 +31,11 @@ check_root() {
 }
 check_root
 
-# 获取系统类型
-get_os_type() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS_TYPE=$ID
-    else
-        OS_TYPE=$(uname -s)
-    fi
-}
-
-# 检查系统为 Alpine
-check_alpine() {
-    if ! grep -q "Alpine" /etc/issue 2>/dev/null; then
-        echo -e "${RED}此脚本仅支持 Alpine Linux${RESET}"
-        exit 1
-    fi
-}
-
-# 初始化系统检查
-check_system() {
-    check_root
-    check_alpine
-}
-
-# 获取服务管理器类型
-get_init_system() {
-    echo "openrc"  # Alpine 使用 OpenRC
-}
-
-# 安装依赖包
-install_dependencies() {
-    apk update 
-    apk add --no-cache wget unzip curl jq iptables ip6tables openrc
-
-    # 安装内核模块
-    apk add --no-cache linux-virt-dev
-    
-    # 加载必要的内核模块并检查是否成功
-    for module in ip_tables ip6_tables iptable_filter ip6table_filter; do
-        if ! modprobe -v "$module"; then
-            echo -e "${YELLOW}警告: 加载模块 $module 失败，防火墙配置将被跳过。${RESET}"
-        fi
-    done
-    
-    # 确保模块开机自动加载
-    cat > /etc/modules-load.d/iptables.conf << EOF
-ip_tables
-ip6_tables
-iptable_filter
-ip6table_filter
-EOF
-}
-
 # 检查 jq 是否安装
 check_jq() {
     if ! command -v jq &> /dev/null; then
-        echo -e "${YELLOW}���检测到 jq，正在安装...${RESET}"
-        case $OS_TYPE in
-            alpine)
-                apk add --no-cache jq
-                ;;
-            ubuntu|debian)
-                wait_for_apt
-                apt update && apt install -y jq
-                ;;
-            *)
-                if [ -x "$(command -v apt)" ]; then
-                    wait_for_apt
-                    apt update && apt install -y jq
-                elif [ -x "$(command -v yum)" ]; then
-                    yum install -y jq
-                elif [ -x "$(command -v apk)" ]; then
-                    apk add --no-cache jq
-                else
-                    echo -e "${RED}未支持的包管理器，无法安装 jq。请手动安装 jq。${RESET}"
-                    exit 1
-                fi
-                ;;
-        esac
+        echo -e "${YELLOW}未检测到 jq，正在安装...${RESET}"
+        apk update && apk add jq
     fi
 }
 check_jq
@@ -191,67 +109,28 @@ get_dns() {
     fi
 }
 
-# 开放端口 (更详细的错误输出)
+# 开放端口 (ufw 和 iptables)
 open_port() {
     local PORT=$1
-    
-    # 检查 iptables 服务是否可用
-    if ! command -v iptables >/dev/null 2>&1; then
-        echo -e "${YELLOW}警告: iptables 未安装，跳过防火墙配置${RESET}"
-        return
+    # 检查 ufw 是否已安装
+    if command -v ufw &> /dev/null; then
+        echo -e "${CYAN}在 UFW 中开放端口 $PORT${RESET}"
+        ufw allow "$PORT"/tcp
     fi
 
-    # 尝试加载必要的内核模块并捕获错误
-    if ! modprobe ip_tables 2>/tmp/modprobe.error; then
-        echo -e "${YELLOW}警告: 加载 ip_tables 模块失败:${RESET}"
-        cat /tmp/modprobe.error
+    # 检查 iptables 是否已安装
+    if command -v iptables &> /dev/null; then
+        echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
+        iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+        iptables-save > /etc/iptables/rules.v4
     fi
-    
-    if ! modprobe ip6_tables 2>/tmp/modprobe.error; then
-        echo -e "${YELLOW}警告: 加载 ip6_tables 模块失败:${RESET}"
-        cat /tmp/modprobe.error
-    fi
-    
-    # 尝试配置 iptables 规则并捕获错误
-    if ! iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/tmp/iptables.error; then
-        echo -e "${YELLOW}警告: 无法配置 IPv4 防火墙规则:${RESET}"
-        cat /tmp/iptables.error
-    fi
-        
-    if ! ip6tables -I INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/tmp/ip6tables.error; then
-        echo -e "${YELLOW}警告: 无法配置 IPv6 防火墙规则:${RESET}"
-        cat /tmp/ip6tables.error
-    fi
-    
-    # 尝试保存规则并捕获错误
-    mkdir -p /etc/iptables
-    if ! iptables-save > /etc/iptables/rules.v4 2>/tmp/iptables-save.error; then
-        echo -e "${YELLOW}警告: 无法保存 IPv4 防火墙规则:${RESET}"
-        cat /tmp/iptables-save.error
-    fi
-    
-    if ! ip6tables-save > /etc/iptables/rules.v6 2>/tmp/ip6tables-save.error; then
-        echo -e "${YELLOW}警告: 无法保存 IPv6 防火墙规则:${RESET}"
-        cat /tmp/ip6tables-save.error
-    fi
-    
-    # 清理临时文件
-    rm -f /tmp/*.error
-}
-
-# 获取初始化系统类型
-get_init_system() {
-    echo "openrc"  # Alpine 使用 OpenRC
 }
 
 # 安装 Snell
 install_snell() {
-    echo -e "${CYAN}正在安装 Snell${RESET}"
+    echo -e "${CYAN}正在安装 Snell (Alpine)${RESET}"
 
-    # 获取系统类型
-    get_os_type
-    # 安装依赖
-    install_dependencies
+    apk update && apk add wget unzip
 
     get_latest_snell_version
     ARCH=$(uname -m)
@@ -292,72 +171,28 @@ ipv6 = true
 dns = ${DNS}
 EOF
 
-    init_system=$(get_init_system)
-    
-    case $init_system in
-        openrc)
-            cat > /etc/init.d/snell << EOF
-#!/sbin/openrc-run
+    cat > ${SYSTEMD_SERVICE_FILE} << EOF
+[Unit]
+Description=Snell Proxy Service
+After=network.target
 
-name="Snell Proxy"
-description="Snell Proxy Service"
-command="${INSTALL_DIR}/snell-server"
-command_args="-c ${SNELL_CONF_FILE}"
-command_background="yes"
-pidfile="/run/snell.pid"
-output_log="/var/log/snell.log"
-error_log="/var/log/snell.err"
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+LimitNOFILE=32768
+ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=snell-server
 
-depend() {
-    need net
-    after net
-}
-
-start_pre() {
-    checkpath -f -m 0644 -o root:root "\$output_log" "\$error_log"
-    checkpath -f -m 0644 -o root:root "${SNELL_CONF_FILE}"
-    checkpath -d -m 0755 -o root:root /run
-}
+[Install]
+WantedBy=multi-user.target
 EOF
-            chmod +x /etc/init.d/snell
-            
-            # 创建日志文件
-            touch /var/log/snell.log /var/log/snell.err
-            chmod 644 /var/log/snell.log /var/log/snell.err
-            
-            # 确保配置文件权限正确
-            chown root:root ${SNELL_CONF_FILE}
-            chmod 644 ${SNELL_CONF_FILE}
-            
-            # 添加服务并启动
-            rc-update add snell default
-            rc-service snell restart
-            
-            # 检查服务状态并输出日志信息
-            sleep 2
-            if ! rc-service snell status >/dev/null 2>&1; then
-                # 检查进程是��真的在运行
-                if pgrep -f "snell-server" >/dev/null; then
-                    echo -e "${GREEN}服务实际正在运行${RESET}"
-                else
-                    echo -e "${RED}服务启动失败，查看错误日志：${RESET}"
-                    if [ -s /var/log/snell.err ]; then
-                        echo -e "${YELLOW}== snell.err 日志 ==${RESET}"
-                        tail -n 20 /var/log/snell.err
-                    fi
-                    if [ -s /var/log/snell.log ]; then
-                        echo -e "${YELLOW}== snell.log 日志 ==${RESET}"
-                        tail -n 20 /var/log/snell.log
-                    fi
-                fi
-            else
-                echo -e "${GREEN}服务启动成功${RESET}"
-            fi
-            ;;
-        *)
-            echo -e "${YELLOW}未检测到支持的服务管理系统${RESET}"
-            ;;
-    esac
+
+    rc-update add snell default
+    rc-service snell start
 
     # 开放端口
     open_port "$PORT"
@@ -399,33 +234,14 @@ EOF
     fi
 }
 
+# 卸载 Snell
 uninstall_snell() {
-    echo -e "${CYAN}正在卸载 Snell${RESET}"
+    echo -e "${CYAN}正在卸载 Snell (Alpine)${RESET}"
 
-    # 获取初始化系统类型
-    init_system=$(get_init_system)
+    rc-service snell stop
+    rc-update del snell default
 
-    # 停止服务
-    case $init_system in
-        systemd)
-            systemctl stop snell
-            systemctl disable snell
-            rm -f /lib/systemd/system/snell.service
-            systemctl daemon-reload
-            ;;
-        openrc)
-            rc-service snell stop
-            rc-update del snell default
-            rm -f /etc/init.d/snell
-            ;;
-        *)
-            # 对于其他系统，尝试查找并结束进程
-            pkill -f "snell-server"
-            ;;
-    esac
-
-    # 删除程序文件和配置
-    rm -f /usr/local/bin/snell-server
+    rm /usr/local/bin/snell-server
     rm -rf ${SNELL_CONF_DIR}
 
     echo -e "${GREEN}Snell 卸载成功${RESET}"
@@ -569,8 +385,8 @@ update_script() {
         # 使用 curl 下载脚本并覆盖当前脚本
         curl -s -o "$0" "https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}脚本更新成功，已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
-            echo -e "${YELLOW}请重新执行脚本以应���更新。${RESET}"
+            echo -e "${GREEN}脚本更新成功！已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
+            echo -e "${YELLOW}请重新执行脚本以应用更新。${RESET}"
             exec "$0"  # 重新执行当前脚本
         else
             echo -e "${RED}脚本更新失败！${RESET}"
@@ -580,21 +396,18 @@ update_script() {
 
 # 检查服务状态的函数
 check_service_status() {
-    if [ -f "/etc/init.d/$1" ]; then
-        if rc-service "$1" status >/dev/null 2>&1; then
-            echo -e "${GREEN}运行中${RESET}"
-        else
-            echo -e "${RED}未运行${RESET}"
-        fi
+    local service=$1
+    if rc-service "$service" status | grep -q "started"; then
+        echo -e "${GREEN}运行中${RESET}"
     else
-        echo -e "${RED}未安装${RESET}"
+        echo -e "${RED}未运行${RESET}"
     fi
 }
 
 # 检查是否安装的函数
 check_installation() {
     local service=$1
-    if [ -f "/etc/init.d/$service" ]; then
+    if rc-update show | grep -q "^$service"; then
         echo -e "${GREEN}已安装${RESET}"
     else
         echo -e "${RED}未安装${RESET}"
@@ -603,26 +416,22 @@ check_installation() {
 
 # 获取 ShadowTLS 配置
 get_shadowtls_config() {
-    if [ ! -f "/etc/init.d/shadowtls" ]; then
+    if ! rc-service shadowtls status | grep -q "started"; then
         return 1
     fi
     
-    if ! rc-service shadowtls status >/dev/null 2>&1; then
-        return 1
-    fi
-    
-    # 读取配置文件中的信息
     local service_file="/etc/init.d/shadowtls"
     if [ ! -f "$service_file" ]; then
         return 1
     fi
     
-    # 提取配置信息 (根据 OpenRC 配置文件格式调整)
-    local exec_line=$(grep "command_args" "$service_file")
+    # 从服务文件中读取配置行
+    local exec_line=$(grep "command_args=" "$service_file")
     if [ -z "$exec_line" ]; then
         return 1
     fi
     
+    # 提取配置信息
     local tls_domain=$(echo "$exec_line" | grep -o -- "--tls [^ ]*" | cut -d' ' -f2)
     local password=$(echo "$exec_line" | grep -o -- "--password [^ ]*" | cut -d' ' -f2)
     local listen_part=$(echo "$exec_line" | grep -o -- "--listen [^ ]*" | cut -d' ' -f2)
@@ -675,7 +484,7 @@ check_and_show_status() {
     # 检查 Snell 状态
     if command -v snell-server &> /dev/null; then
         echo -e "${GREEN}Snell 已安装${RESET}"
-        if rc-service snell status >/dev/null 2>&1; then
+        if rc-service snell status | grep -q "started"; then
             echo -e "${GREEN}Snell 服务运行中${RESET}"
         else
             echo -e "${RED}Snell 服务未运行${RESET}"
@@ -687,7 +496,7 @@ check_and_show_status() {
     # 检查 ShadowTLS 状态
     if [ -f "/usr/local/bin/shadow-tls" ]; then
         echo -e "${GREEN}ShadowTLS 已安装${RESET}"
-        if rc-service shadowtls status >/dev/null 2>&1; then
+        if rc-service shadowtls status | grep -q "started"; then
             echo -e "${GREEN}ShadowTLS 服务运行中${RESET}"
         else
             echo -e "${RED}ShadowTLS 服务未运行${RESET}"
@@ -765,7 +574,7 @@ setup_shadowtls() {
     echo -e "${CYAN}正在执行 ShadowTLS 管理脚本...${RESET}"
     bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/shadowtls.sh)
     
-    # ShadowTLS 脋本执行完毕后会自动返回这��
+    # ShadowTLS 脚本执行完毕后会自动返回这里
     echo -e "${GREEN}ShadowTLS 管理操作完成${RESET}"
     sleep 1  # 给用户一点时间看到提示
 }
@@ -782,7 +591,6 @@ while true; do
             ;;
         3)
             view_snell_config
-            read -p "按任意键继续..."
             ;;
         4)
             setup_shadowtls
