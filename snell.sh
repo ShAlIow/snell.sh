@@ -49,30 +49,29 @@ get_os_type() {
     fi
 }
 
+# 检查系统为 Alpine
+check_alpine() {
+    if ! grep -q "Alpine" /etc/issue 2>/dev/null; then
+        echo -e "${RED}此脚本仅支持 Alpine Linux${RESET}"
+        exit 1
+    fi
+}
+
+# 初始化系统检查
+check_system() {
+    check_root
+    check_alpine
+}
+
+# 获取服务管理器类型
+get_init_system() {
+    echo "openrc"  # Alpine 使用 OpenRC
+}
+
 # 安装依赖包
 install_dependencies() {
-    case $OS_TYPE in
-        alpine)
-            apk update && apk add --no-cache wget unzip curl jq iptables ip6tables
-            ;;
-        ubuntu|debian)
-            wait_for_apt
-            apt update && apt install -y wget unzip curl jq iptables
-            ;;
-        *)
-            if [ -x "$(command -v apt)" ]; then
-                wait_for_apt
-                apt update && apt install -y wget unzip curl jq iptables
-            elif [ -x "$(command -v yum)" ]; then
-                yum install -y wget unzip curl jq iptables
-            elif [ -x "$(command -v apk)" ]; then
-                apk update && apk add --no-cache wget unzip curl jq iptables ip6tables
-            else
-                echo -e "${RED}不支持的系统类型${RESET}"
-                exit 1
-            fi
-            ;;
-    esac
+    apk update 
+    apk add --no-cache wget unzip curl jq iptables ip6tables openrc
 }
 
 # 检查 jq 是否安装
@@ -162,7 +161,7 @@ get_user_port() {
     done
 }
 
-# 获取用户输入的 DNS 服务器
+# ��取用户输入的 DNS 服务器
 get_dns() {
     read -rp "请输入 DNS 服务器地址 (直接回车使用默认 1.1.1.1,8.8.8.8): " custom_dns
     if [ -z "$custom_dns" ]; then
@@ -203,15 +202,7 @@ open_port() {
 
 # 获取初始化系统类型
 get_init_system() {
-    if [[ `systemctl` =~ -\.mount ]]; then
-        echo "systemd"
-    elif [[ `/sbin/init --version` =~ upstart ]]; then
-        echo "upstart"
-    elif [[ -f /etc/init.d/cron && ! -h /etc/init.d/cron ]]; then
-        echo "openrc"
-    else
-        echo "unknown"
-    fi
+    echo "openrc"  # Alpine 使用 OpenRC
 }
 
 # 安装 Snell
@@ -311,7 +302,7 @@ EOF
             rc-service snell start
             ;;
         *)
-            echo -e "${YELLOW}未检测到支持的服务管理系统，将以后台方式运行${RESET}"
+            echo -e "${YELLOW}未检测到支持的服务管理系统，将��后台方式运行${RESET}"
             nohup ${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE} >/dev/null 2>&1 &
             ;;
     esac
@@ -526,7 +517,7 @@ update_script() {
         # 使用 curl 下载脚本并覆盖当前脚本
         curl -s -o "$0" "https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}脚本更新成功���已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
+            echo -e "${GREEN}脚本更新成功，已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
             echo -e "${YELLOW}请重新执行脚本以应用更新。${RESET}"
             exec "$0"  # 重新执行当前脚本
         else
@@ -538,7 +529,7 @@ update_script() {
 # 检查服务状态的函数
 check_service_status() {
     local service=$1
-    if systemctl is-active --quiet "$service"; then
+    if rc-service $service status >/dev/null 2>&1; then
         echo -e "${GREEN}运行中${RESET}"
     else
         echo -e "${RED}未运行${RESET}"
@@ -548,7 +539,7 @@ check_service_status() {
 # 检查是否安装的函数
 check_installation() {
     local service=$1
-    if systemctl list-unit-files | grep -q "^$service.service"; then
+    if [ -f "/etc/init.d/$service" ]; then
         echo -e "${GREEN}已安装${RESET}"
     else
         echo -e "${RED}未安装${RESET}"
@@ -625,7 +616,7 @@ check_and_show_status() {
     # 检查 Snell 状态
     if command -v snell-server &> /dev/null; then
         echo -e "${GREEN}Snell 已安装${RESET}"
-        if systemctl is-active snell &> /dev/null; then
+        if rc-service snell status >/dev/null 2>&1; then
             echo -e "${GREEN}Snell 服务运行中${RESET}"
         else
             echo -e "${RED}Snell 服务未运行${RESET}"
@@ -637,7 +628,7 @@ check_and_show_status() {
     # 检查 ShadowTLS 状态
     if [ -f "/usr/local/bin/shadow-tls" ]; then
         echo -e "${GREEN}ShadowTLS 已安装${RESET}"
-        if systemctl is-active shadowtls &> /dev/null; then
+        if rc-service shadowtls status >/dev/null 2>&1; then
             echo -e "${GREEN}ShadowTLS 服务运行中${RESET}"
         else
             echo -e "${RED}ShadowTLS 服务未运行${RESET}"
@@ -652,7 +643,7 @@ check_and_show_status() {
 # 检查是否以 root 权限运行
 check_root() {
     if [ "$(id -u)" != "0" ]; then
-        echo -e "${RED}请以 root 权限运行此��本${RESET}"
+        echo -e "${RED}请以 root 权限运行此脚本${RESET}"
         exit 1
     fi
 }
@@ -749,19 +740,6 @@ while true; do
         8)
             check_and_show_status
             read -p "按任意键继续..."
-            ;;
-        0)
-            echo -e "${GREEN}感谢使用，再见！${RESET}"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}请输入正确的选项 [0-8]${RESET}"
-            ;;
-    esac
-    echo -e "\n${CYAN}按任意键返回主菜单...${RESET}"
-    read -n 1 -s -r
-done
-
             ;;
         0)
             echo -e "${GREEN}感谢使用，再见！${RESET}"
