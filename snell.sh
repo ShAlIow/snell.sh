@@ -79,8 +79,7 @@ install_dependencies() {
     # 加载必要的内核模块并检查是否成功
     for module in ip_tables ip6_tables iptable_filter ip6table_filter; do
         if ! modprobe -v "$module"; then
-            echo -e "${RED}错误: 加载模块 $module 失败，请确保内核支持该模块。${RESET}"
-            exit 1
+            echo -e "${YELLOW}警告: 加载模块 $module 失败，防火墙配置将被跳过。${RESET}"
         fi
     done
     
@@ -96,7 +95,7 @@ EOF
 # 检查 jq 是否安装
 check_jq() {
     if ! command -v jq &> /dev/null; then
-        echo -e "${YELLOW}未检测到 jq，正在安装...${RESET}"
+        echo -e "${YELLOW}��检测到 jq，正在安装...${RESET}"
         case $OS_TYPE in
             alpine)
                 apk add --no-cache jq
@@ -135,7 +134,7 @@ check_snell_installed() {
 # 获取 Snell 最新版本
 get_latest_snell_version() {
     latest_version=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-    if [ -n "$latest_version" ]; then
+    if ( -n "$latest_version" ]; then
         SNELL_VERSION="v${latest_version}"
     else
         echo -e "${RED}获取 Snell 最新版本失败，使用默认版本 ${SNELL_VERSION}${RESET}"
@@ -337,7 +336,7 @@ EOF
             # 检查服务状态并输出日志信息
             sleep 2
             if ! rc-service snell status >/dev/null 2>&1; then
-                # 检查进程是否真的在运行
+                # 检查进程是��真的在运行
                 if pgrep -f "snell-server" >/dev/null; then
                     echo -e "${GREEN}服务实际正在运行${RESET}"
                 else
