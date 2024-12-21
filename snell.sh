@@ -39,20 +39,68 @@ check_root() {
 }
 check_root
 
+# 获取系统类型
+get_os_type() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_TYPE=$ID
+    else
+        OS_TYPE=$(uname -s)
+    fi
+}
+
+# 安装依赖包
+install_dependencies() {
+    case $OS_TYPE in
+        alpine)
+            apk update && apk add --no-cache wget unzip curl jq iptables ip6tables
+            ;;
+        ubuntu|debian)
+            wait_for_apt
+            apt update && apt install -y wget unzip curl jq iptables
+            ;;
+        *)
+            if [ -x "$(command -v apt)" ]; then
+                wait_for_apt
+                apt update && apt install -y wget unzip curl jq iptables
+            elif [ -x "$(command -v yum)" ]; then
+                yum install -y wget unzip curl jq iptables
+            elif [ -x "$(command -v apk)" ]; then
+                apk update && apk add --no-cache wget unzip curl jq iptables ip6tables
+            else
+                echo -e "${RED}不支持的系统类型${RESET}"
+                exit 1
+            fi
+            ;;
+    esac
+}
+
 # 检查 jq 是否安装
 check_jq() {
     if ! command -v jq &> /dev/null; then
         echo -e "${YELLOW}未检测到 jq，正在安装...${RESET}"
-        # 根据系统类型安装 jq
-        if [ -x "$(command -v apt)" ]; then
-            wait_for_apt
-            apt update && apt install -y jq
-        elif [ -x "$(command -v yum)" ]; then
-            yum install -y jq
-        else
-            echo -e "${RED}未支持的包管理器，无法安装 jq。请手动安装 jq。${RESET}"
-            exit 1
-        fi
+        case $OS_TYPE in
+            alpine)
+                apk add --no-cache jq
+                ;;
+            ubuntu|debian)
+                wait_for_apt
+                apt update && apt install -y jq
+                ;;
+            *)
+                if [ -x "$(command -v apt)" ]; then
+                    wait_for_apt
+                    apt update && apt install -y jq
+                elif [ -x "$(command -v yum)" ]; then
+                    yum install -y jq
+                elif [ -x "$(command -v apk)" ]; then
+                    apk add --no-cache jq
+                else
+                    echo -e "${RED}未支持的包管理器，无法安装 jq。请手动安装 jq。${RESET}"
+                    exit 1
+                fi
+                ;;
+        esac
     fi
 }
 check_jq
@@ -129,26 +177,38 @@ get_dns() {
 # 开放端口 (ufw 和 iptables)
 open_port() {
     local PORT=$1
-    # 检查 ufw 是否已安装
-    if command -v ufw &> /dev/null; then
-        echo -e "${CYAN}在 UFW 中开放端口 $PORT${RESET}"
-        ufw allow "$PORT"/tcp
-    fi
-
-    # 检查 iptables 是否已安装
-    if command -v iptables &> /dev/null; then
-        echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
-        iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
-        iptables-save > /etc/iptables/rules.v4
-    fi
+    case $OS_TYPE in
+        alpine)
+            # Alpine 使用 iptables
+            iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+            ip6tables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+            # 保存 iptables 规则
+            iptables-save > /etc/iptables/rules.v4
+            ip6tables-save > /etc/iptables/rules.v6
+            ;;
+        *)
+            # 其他系统保持原有逻辑
+            if command -v ufw &> /dev/null; then
+                echo -e "${CYAN}在 UFW 中开放端口 $PORT${RESET}"
+                ufw allow "$PORT"/tcp
+            fi
+            if command -v iptables &> /dev/null; then
+                echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
+                iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+                iptables-save > /etc/iptables/rules.v4
+            fi
+            ;;
+    esac
 }
 
 # 安装 Snell
 install_snell() {
     echo -e "${CYAN}正在安装 Snell${RESET}"
 
-    wait_for_apt
-    apt update && apt install -y wget unzip
+    # 获取系统类型
+    get_os_type
+    # 安装依赖
+    install_dependencies
 
     get_latest_snell_version
     ARCH=$(uname -m)
@@ -559,7 +619,7 @@ check_and_show_status() {
 # 检查是否以 root 权限运行
 check_root() {
     if [ "$(id -u)" != "0" ]; then
-        echo -e "${RED}请以 root 权限运行此脚本${RESET}"
+        echo -e "${RED}请以 root 权限运行此��本${RESET}"
         exit 1
     fi
 }
