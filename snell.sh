@@ -72,6 +72,23 @@ get_init_system() {
 install_dependencies() {
     apk update 
     apk add --no-cache wget unzip curl jq iptables ip6tables openrc
+
+    # 安装内核模块
+    apk add --no-cache linux-virt-dev
+    
+    # 加载必要的内核模块
+    modprobe -v ip_tables
+    modprobe -v ip6_tables
+    modprobe -v iptable_filter
+    modprobe -v ip6table_filter
+    
+    # 确保模块开机自动加载
+    cat > /etc/modules-load.d/iptables.conf << EOF
+ip_tables
+ip6_tables
+iptable_filter
+ip6table_filter
+EOF
 }
 
 # 检查 jq 是否安装
@@ -95,7 +112,7 @@ check_jq() {
                 elif [ -x "$(command -v apk)" ]; then
                     apk add --no-cache jq
                 else
-                    echo -e "${RED}未支持的包管理器，无法安装 jq。请手动安装 jq。${RESET}"
+                    echo -e "${RED}未支持的包管理器，无法安装 jq。请��动安装 jq。${RESET}"
                     exit 1
                 fi
                 ;;
@@ -173,31 +190,31 @@ get_dns() {
     fi
 }
 
-# 开放端口 (ufw 和 iptables)
+# 开放端口 (更安全的实现)
 open_port() {
     local PORT=$1
-    case $OS_TYPE in
-        alpine)
-            # Alpine 使用 iptables
-            iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
-            ip6tables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
-            # 保存 iptables 规则
-            iptables-save > /etc/iptables/rules.v4
-            ip6tables-save > /etc/iptables/rules.v6
-            ;;
-        *)
-            # 其他系统保持原有逻辑
-            if command -v ufw &> /dev/null; then
-                echo -e "${CYAN}在 UFW 中开放端口 $PORT${RESET}"
-                ufw allow "$PORT"/tcp
-            fi
-            if command -v iptables &> /dev/null; then
-                echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
-                iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
-                iptables-save > /etc/iptables/rules.v4
-            fi
-            ;;
-    esac
+    
+    # 检查 iptables 服务是否可用
+    if ! command -v iptables >/dev/null 2>&1; then
+        echo -e "${YELLOW}警告: iptables 未安装，跳过防火墙配置${RESET}"
+        return
+    }
+
+    # 尝试加载必要的内核模块
+    modprobe -v ip_tables >/dev/null 2>&1 || true
+    modprobe -v ip6_tables >/dev/null 2>&1 || true
+    
+    # 尝试配置 iptables 规则，如果失败则不中断脚本
+    iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT >/dev/null 2>&1 || \
+        echo -e "${YELLOW}警告: 无法配置 IPv4 防火墙规则${RESET}"
+        
+    ip6tables -I INPUT -p tcp --dport "$PORT" -j ACCEPT >/dev/null 2>&1 || \
+        echo -e "${YELLOW}警告: 无法配置 IPv6 防火墙规���${RESET}"
+    
+    # 尝试保存规则，如果失败则不中断脚本
+    mkdir -p /etc/iptables
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
 }
 
 # 获取初始化系统类型
@@ -335,7 +352,7 @@ EOF
     # 如果有 IPv6 地址
     if [ ! -z "$IPV6_ADDR" ]; then
         IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
-        echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
+        echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所��国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
 
     echo -e "${GREEN}Snell 安装成功${RESET}"
@@ -681,7 +698,7 @@ show_menu() {
     echo -e "${YELLOW}=== 基础功能 ===${RESET}"
     echo -e "${GREEN}1.${RESET} 安装 Snell"
     echo -e "${GREEN}2.${RESET} 卸载 Snell"
-    echo -e "${GREEN}3.${RESET} 查看配置"
+    echo -e "${GREEN}3.${RESET} 查看���置"
     
     echo -e "\n${YELLOW}=== 增强功能 ===${RESET}"
     echo -e "${GREEN}4.${RESET} ShadowTLS 管理"
