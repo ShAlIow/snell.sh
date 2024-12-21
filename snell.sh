@@ -201,6 +201,19 @@ open_port() {
     esac
 }
 
+# 获取初始化系统类型
+get_init_system() {
+    if [[ `systemctl` =~ -\.mount ]]; then
+        echo "systemd"
+    elif [[ `/sbin/init --version` =~ upstart ]]; then
+        echo "upstart"
+    elif [[ -f /etc/init.d/cron && ! -h /etc/init.d/cron ]]; then
+        echo "openrc"
+    else
+        echo "unknown"
+    fi
+}
+
 # 安装 Snell
 install_snell() {
     echo -e "${CYAN}正在安装 Snell${RESET}"
@@ -249,7 +262,11 @@ ipv6 = true
 dns = ${DNS}
 EOF
 
-    cat > ${SYSTEMD_SERVICE_FILE} << EOF
+    init_system=$(get_init_system)
+    
+    case $init_system in
+        systemd)
+            cat > ${SYSTEMD_SERVICE_FILE} << EOF
 [Unit]
 Description=Snell Proxy Service
 After=network.target
@@ -268,24 +285,36 @@ SyslogIdentifier=snell-server
 [Install]
 WantedBy=multi-user.target
 EOF
+            systemctl daemon-reload
+            systemctl enable snell
+            systemctl start snell
+            ;;
+        openrc)
+            cat > /etc/init.d/snell << EOF
+#!/sbin/openrc-run
 
-    systemctl daemon-reload
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}重载 Systemd 配置失败。${RESET}"
-        exit 1
-    fi
+name="Snell Proxy"
+description="Snell Proxy Service"
+command="${INSTALL_DIR}/snell-server"
+command_args="-c ${SNELL_CONF_FILE}"
+command_user="nobody:nogroup"
+command_background=yes
+pidfile="/run/\${RC_SVCNAME}.pid"
 
-    systemctl enable snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}开机自启动 Snell 失败。${RESET}"
-        exit 1
-    fi
-
-    systemctl start snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}启动 Snell 服务失败。${RESET}"
-        exit 1
-    fi
+depend() {
+    need net
+    after net
+}
+EOF
+            chmod +x /etc/init.d/snell
+            rc-update add snell default
+            rc-service snell start
+            ;;
+        *)
+            echo -e "${YELLOW}未检测到支持的服务管理系统，将以后台方式运行${RESET}"
+            nohup ${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE} >/dev/null 2>&1 &
+            ;;
+    esac
 
     # 开放端口
     open_port "$PORT"
@@ -699,6 +728,7 @@ while true; do
             ;;
         3)
             view_snell_config
+            read -p "按任意键继续..."
             ;;
         4)
             setup_shadowtls
@@ -715,6 +745,19 @@ while true; do
         8)
             check_and_show_status
             read -p "按任意键继续..."
+            ;;
+        0)
+            echo -e "${GREEN}感谢使用，再见！${RESET}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}请输入正确的选项 [0-8]${RESET}"
+            ;;
+    esac
+    echo -e "\n${CYAN}按任意键返回主菜单...${RESET}"
+    read -n 1 -s -r
+done
+
             ;;
         0)
             echo -e "${GREEN}感谢使用，再见！${RESET}"
