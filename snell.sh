@@ -76,11 +76,13 @@ install_dependencies() {
     # 安装内核模块
     apk add --no-cache linux-virt-dev
     
-    # 加载必要的内核模块
-    modprobe -v ip_tables
-    modprobe -v ip6_tables
-    modprobe -v iptable_filter
-    modprobe -v ip6table_filter
+    # 加载必要的内核模块并检查是否成功
+    for module in ip_tables ip6_tables iptable_filter ip6table_filter; do
+        if ! modprobe -v "$module"; then
+            echo -e "${RED}错误: 加载模块 $module 失败，请确保内核支持该模块。${RESET}"
+            exit 1
+        fi
+    done
     
     # 确保模块开机自动加载
     cat > /etc/modules-load.d/iptables.conf << EOF
@@ -112,7 +114,7 @@ check_jq() {
                 elif [ -x "$(command -v apk)" ]; then
                     apk add --no-cache jq
                 else
-                    echo -e "${RED}未支持的包管理器，无法安装 jq。请��动安装 jq。${RESET}"
+                    echo -e "${RED}未支持的包管理器，无法安装 jq。请手动安装 jq。${RESET}"
                     exit 1
                 fi
                 ;;
@@ -335,13 +337,20 @@ EOF
             # 检查服务状态并输出日志信息
             sleep 2
             if ! rc-service snell status >/dev/null 2>&1; then
-                echo -e "${RED}服务启动失败，查看错误日志：${RESET}"
-                echo -e "${YELLOW}== snell.err 日志 ==${RESET}"
-                tail -n 20 /var/log/snell.err
-                echo -e "${YELLOW}== snell.log 日志 ==${RESET}"
-                tail -n 20 /var/log/snell.log
-                echo -e "${YELLOW}== dmesg 日志 ==${RESET}"
-                dmesg | tail -n 20
+                # 检查进程是否真的在运行
+                if pgrep -f "snell-server" >/dev/null; then
+                    echo -e "${GREEN}服务实际正在运行${RESET}"
+                else
+                    echo -e "${RED}服务启动失败，查看错误日志：${RESET}"
+                    if [ -s /var/log/snell.err ]; then
+                        echo -e "${YELLOW}== snell.err 日志 ==${RESET}"
+                        tail -n 20 /var/log/snell.err
+                    fi
+                    if [ -s /var/log/snell.log ]; then
+                        echo -e "${YELLOW}== snell.log 日志 ==${RESET}"
+                        tail -n 20 /var/log/snell.log
+                    fi
+                fi
             else
                 echo -e "${GREEN}服务启动成功${RESET}"
             fi
@@ -562,7 +571,7 @@ update_script() {
         curl -s -o "$0" "https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}脚本更新成功，已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
-            echo -e "${YELLOW}请重新执行脚本以应用更新。${RESET}"
+            echo -e "${YELLOW}请重新执行脚本以应���更新。${RESET}"
             exec "$0"  # 重新执行当前脚本
         else
             echo -e "${RED}脚本更新失败！${RESET}"
@@ -757,7 +766,7 @@ setup_shadowtls() {
     echo -e "${CYAN}正在执行 ShadowTLS 管理脚本...${RESET}"
     bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/shadowtls.sh)
     
-    # ShadowTLS 脚本执行完毕后会自动返回这里
+    # ShadowTLS 脋本执行完毕后会自动返回这里
     echo -e "${GREEN}ShadowTLS 管理操作完成${RESET}"
     sleep 1  # 给用户一点时间看到提示
 }
