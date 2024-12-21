@@ -178,7 +178,7 @@ get_user_port() {
     done
 }
 
-# ��取用户输入的 DNS 服务器
+# 获取用户输入的 DNS 服务器
 get_dns() {
     read -rp "请输入 DNS 服务器地址 (直接回车使用默认 1.1.1.1,8.8.8.8): " custom_dns
     if [ -z "$custom_dns" ]; then
@@ -198,7 +198,7 @@ open_port() {
     if ! command -v iptables >/dev/null 2>&1; then
         echo -e "${YELLOW}警告: iptables 未安装，跳过防火墙配置${RESET}"
         return
-    }
+    fi
 
     # 尝试加载必要的内核模块
     modprobe -v ip_tables >/dev/null 2>&1 || true
@@ -644,7 +644,7 @@ check_and_show_status() {
         if rc-service snell status >/dev/null 2>&1; then
             echo -e "${GREEN}Snell 服务运行中${RESET}"
         else
-            echo -e "${RED}Snell 服务未��行${RESET}"
+            echo -e "${RED}Snell 服务未运行${RESET}"
         fi
     else
         echo -e "${YELLOW}Snell 未安装${RESET}"
@@ -698,7 +698,7 @@ show_menu() {
     echo -e "${YELLOW}=== 基础功能 ===${RESET}"
     echo -e "${GREEN}1.${RESET} 安装 Snell"
     echo -e "${GREEN}2.${RESET} 卸载 Snell"
-    echo -e "${GREEN}3.${RESET} 查看���置"
+    echo -e "${GREEN}3.${RESET} 查看配置"
     
     echo -e "\n${YELLOW}=== 增强功能 ===${RESET}"
     echo -e "${GREEN}4.${RESET} ShadowTLS 管理"
