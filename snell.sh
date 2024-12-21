@@ -19,7 +19,6 @@ current_version="2.1"
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
 INSTALL_DIR="/usr/local/bin"
-SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
 SNELL_VERSION="v4.0.1"  # 初始默认版本
 
 # 检查是否以 root 权限运行
@@ -171,25 +170,21 @@ ipv6 = true
 dns = ${DNS}
 EOF
 
-    cat > ${SYSTEMD_SERVICE_FILE} << EOF
-[Unit]
-Description=Snell Proxy Service
-After=network.target
+    cat > /etc/init.d/snell << 'EOF'
+#!/sbin/openrc-run
 
-[Service]
-Type=simple
-User=nobody
-Group=nogroup
-LimitNOFILE=32768
-ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=snell-server
+name="Snell"
+description="Snell Proxy Service"
+command="/usr/local/bin/snell-server"
+command_args="-c /etc/snell/snell-server.conf"
+command_background="yes"
+pidfile="/var/run/snell.pid"
 
-[Install]
-WantedBy=multi-user.target
+depend() {
+    need net
+}
 EOF
+    chmod +x /etc/init.d/snell
 
     rc-update add snell default
     rc-service snell start
