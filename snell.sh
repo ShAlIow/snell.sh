@@ -19,7 +19,16 @@ current_version="2.1"
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
 INSTALL_DIR="/usr/local/bin"
+SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
 SNELL_VERSION="v4.0.1"  # 初始默认版本
+
+# 等待其他 apt 进程完成
+wait_for_apt() {
+    while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+        echo -e "${YELLOW}等待其他 apt 进程完成...${RESET}"
+        sleep 1
+    done
+}
 
 # 检查是否以 root 权限运行
 check_root() {
@@ -34,7 +43,16 @@ check_root
 check_jq() {
     if ! command -v jq &> /dev/null; then
         echo -e "${YELLOW}未检测到 jq，正在安装...${RESET}"
-        apk update && apk add jq
+        # 根据系统类型安装 jq
+        if [ -x "$(command -v apt)" ]; then
+            wait_for_apt
+            apt update && apt install -y jq
+        elif [ -x "$(command -v yum)" ]; then
+            yum install -y jq
+        else
+            echo -e "${RED}未支持的包管理器，无法安装 jq。请手动安装 jq。${RESET}"
+            exit 1
+        fi
     fi
 }
 check_jq
@@ -127,9 +145,10 @@ open_port() {
 
 # 安装 Snell
 install_snell() {
-    echo -e "${CYAN}正在安装 Snell (Alpine)${RESET}"
+    echo -e "${CYAN}正在安装 Snell${RESET}"
 
-    apk update && apk add wget unzip
+    wait_for_apt
+    apt update && apt install -y wget unzip
 
     get_latest_snell_version
     ARCH=$(uname -m)
@@ -170,24 +189,43 @@ ipv6 = true
 dns = ${DNS}
 EOF
 
-    cat > /etc/init.d/snell << 'EOF'
-#!/sbin/openrc-run
+    cat > ${SYSTEMD_SERVICE_FILE} << EOF
+[Unit]
+Description=Snell Proxy Service
+After=network.target
 
-name="Snell"
-description="Snell Proxy Service"
-command="/usr/local/bin/snell-server"
-command_args="-c /etc/snell/snell-server.conf"
-command_background="yes"
-pidfile="/var/run/snell.pid"
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+LimitNOFILE=32768
+ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=snell-server
 
-depend() {
-    need net
-}
+[Install]
+WantedBy=multi-user.target
 EOF
-    chmod +x /etc/init.d/snell
 
-    rc-update add snell default
-    rc-service snell start
+    systemctl daemon-reload
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}重载 Systemd 配置失败。${RESET}"
+        exit 1
+    fi
+
+    systemctl enable snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}开机自启动 Snell 失败。${RESET}"
+        exit 1
+    fi
+
+    systemctl start snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}启动 Snell 服务失败。${RESET}"
+        exit 1
+    fi
 
     # 开放端口
     open_port "$PORT"
@@ -231,10 +269,25 @@ EOF
 
 # 卸载 Snell
 uninstall_snell() {
-    echo -e "${CYAN}正在卸载 Snell (Alpine)${RESET}"
+    echo -e "${CYAN}正在卸载 Snell${RESET}"
 
-    rc-service snell stop
-    rc-update del snell default
+    systemctl stop snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}停止 Snell 服务失败。${RESET}"
+        exit 1
+    fi
+
+    systemctl disable snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}禁用开机自启动失败。${RESET}"
+        exit 1
+    fi
+
+    rm /lib/systemd/system/snell.service
+    if [ $? -ne 0 ];then
+        echo -e "${RED}删除 Systemd 服务文件失败。${RESET}"
+        exit 1
+    fi
 
     rm /usr/local/bin/snell-server
     rm -rf ${SNELL_CONF_DIR}
@@ -392,7 +445,7 @@ update_script() {
 # 检查服务状态的函数
 check_service_status() {
     local service=$1
-    if rc-service "$service" status | grep -q "started"; then
+    if systemctl is-active --quiet "$service"; then
         echo -e "${GREEN}运行中${RESET}"
     else
         echo -e "${RED}未运行${RESET}"
@@ -402,7 +455,7 @@ check_service_status() {
 # 检查是否安装的函数
 check_installation() {
     local service=$1
-    if rc-update show | grep -q "^$service"; then
+    if systemctl list-unit-files | grep -q "^$service.service"; then
         echo -e "${GREEN}已安装${RESET}"
     else
         echo -e "${RED}未安装${RESET}"
@@ -411,17 +464,17 @@ check_installation() {
 
 # 获取 ShadowTLS 配置
 get_shadowtls_config() {
-    if ! rc-service shadowtls status | grep -q "started"; then
+    if ! systemctl is-active --quiet shadowtls.service; then
         return 1
     fi
     
-    local service_file="/etc/init.d/shadowtls"
+    local service_file="/etc/systemd/system/shadowtls.service"
     if [ ! -f "$service_file" ]; then
         return 1
     fi
     
     # 从服务文件中读取配置行
-    local exec_line=$(grep "command_args=" "$service_file")
+    local exec_line=$(grep "ExecStart=" "$service_file")
     if [ -z "$exec_line" ]; then
         return 1
     fi
@@ -479,7 +532,7 @@ check_and_show_status() {
     # 检查 Snell 状态
     if command -v snell-server &> /dev/null; then
         echo -e "${GREEN}Snell 已安装${RESET}"
-        if rc-service snell status | grep -q "started"; then
+        if systemctl is-active snell &> /dev/null; then
             echo -e "${GREEN}Snell 服务运行中${RESET}"
         else
             echo -e "${RED}Snell 服务未运行${RESET}"
@@ -491,7 +544,7 @@ check_and_show_status() {
     # 检查 ShadowTLS 状态
     if [ -f "/usr/local/bin/shadow-tls" ]; then
         echo -e "${GREEN}ShadowTLS 已安装${RESET}"
-        if rc-service shadowtls status | grep -q "started"; then
+        if systemctl is-active shadowtls &> /dev/null; then
             echo -e "${GREEN}ShadowTLS 服务运行中${RESET}"
         else
             echo -e "${RED}ShadowTLS 服务未运行${RESET}"
